@@ -32,18 +32,20 @@ def display_audio(audio):
 
 def apply_impulse_response(audio, impulse_response):
 	input_max = np.max(np.abs(audio))
-	if len(impulse_response.shape) == 2:
+	if len(impulse_response.shape) == 2: # stereo impulse response
+		if len(audio.shape) == 1: # mono input
+			audio = np.array([audio, audio]).T
 		audio = np.array([np.convolve(audio[:, i], impulse_response[:, i]) for i in range(2)]).T
 	else:
 		audio = np.convolve(audio, impulse_response)
 	return audio / np.max(np.abs(audio)) * input_max
 
 # ir = read_audio('room_ir.wav')
-# input = read_audio('my_voice.wav')
-# output = apply_impulse_response(input, ir)
-# play_audio(output)
-# write_audio('output.wav', output)
-
+ir = read_audio('left binaural impulse.wav')
+input = read_audio('my_voice.wav')
+output = apply_impulse_response(input, ir)
+play_audio(output)
+write_audio('output.wav', output)
 
 
 
@@ -78,7 +80,7 @@ def stereo_unison(freq, detune, spread, voices):
 		saws.append(pan_saw)
 	return np.mean(saws, axis=0)
 
-audio = stereo_unison(440, 0.01, 1, 3)
-audio = pass_filter(audio, 800, type='lowpass')
-play_audio(audio)
+# audio = stereo_unison(440, 0.01, 1, 3)
+# audio = pass_filter(audio, 800, type='lowpass')
+# play_audio(audio)
 
