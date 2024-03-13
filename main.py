@@ -27,17 +27,47 @@ def display_audio(audio):
 	plt.plot(audio)
 	plt.show()
 
+def pad_audio_to_length(audio, length):
+	if len(audio) >= length:
+		return audio
+	if len(audio.shape) == 1:
+		return np.pad(audio, (0, length - len(audio)))
+	return np.pad(audio, ((0, length - len(audio)), (0, 0)))
+
+def combine_audio(audio1, audio2):
+	if len(audio1.shape) != len(audio2.shape):
+		raise ValueError('Audio channels do not match')
+	if audio1.shape[0] > audio2.shape[0]:
+		audio2 = pad_audio_to_length(audio2, audio1.shape[0])
+	else:
+		audio1 = pad_audio_to_length(audio1, audio2.shape[0])
+	return audio1 + audio2
+
+def mix_audio(audio1, audio2, ratio):
+	return audio1 * ratio + audio2 * (1 - ratio)
+
+def pass_filter(audio, cutoff, order=1, type='highpass'):
+	sos = iirfilter(order, cutoff, btype=type, fs=sample_rate, output='sos')
+	if len(audio.shape) == 2:
+		return np.array([sosfilt(sos, audio[:, i]) for i in range(2)]).T
+	return sosfilt(sos, audio)
+
+
 
 
 
 def apply_impulse_response(audio, impulse_response):
 	input_max = np.max(np.abs(audio))
-	if len(impulse_response.shape) == 2: # stereo impulse response
+	if len(impulse_response.shape) == 1: # mono impulse response
 		if len(audio.shape) == 1: # mono input
-			audio = np.array([audio, audio]).T
-		audio = np.array([np.convolve(audio[:, i], impulse_response[:, i]) for i in range(2)]).T
+			audio = np.convolve(audio, impulse_response)
+		else:
+			audio = np.array([np.convolve(audio[:, i], impulse_response) for i in range(2)]).T
 	else:
-		audio = np.convolve(audio, impulse_response)
+		if len(audio.shape) == 1: # mono input
+			audio = np.array([np.convolve(audio, impulse_response[:, i]) for i in range(2)]).T
+		else:
+			audio = np.array([np.convolve(audio[:, i], impulse_response[:, i]) for i in range(2)]).T
 	return audio / np.max(np.abs(audio)) * input_max
 
 class Vec3:
@@ -55,7 +85,7 @@ class Vec3:
 		return Vec3(self.x / scalar, self.y / scalar, self.z / scalar)
 	def length(self):
 		return np.sqrt(self.x ** 2 + self.y ** 2 + self.z ** 2)
-	def normalize(self):
+	def norm(self):
 		return self / self.length()
 	def dot(self, other):
 		return self.x * other.x + self.y * other.y + self.z * other.z
@@ -66,112 +96,74 @@ class Vec3:
 			self.x * other.y - self.y * other.x
 		)
 
+
 speed_of_sound = 343 # m/s
 
 class AudioEnv:
-	bounce_mult = 0.2 # how much sound is reflected off walls
-
-	s2 = np.sqrt(2) / 2
-	s3 = np.sqrt(3) / 3
-	ray_dirs = [
-		# XY plane
-		Vec3(   1,   0,   0), # right
-		Vec3(  s2,  s2,   0), # forward-right
-		Vec3(   0,   1,   0), # forward
-		Vec3( -s2,  s2,   0), # forward-left
-		Vec3(  -1,   0,   0), # left
-		Vec3( -s2, -s2,   0), # back-left
-		Vec3(   0,  -1,   0), # back
-		Vec3(  s2, -s2,   0), # back-right
-
-		# XZ plane
-		#                     # right
-		Vec3(  s2,   0,  s2), # right-up
-		Vec3(   0,   0,   1), # up
-		Vec3( -s2,   0,  s2), # left-up
-		#                     # left
-		Vec3( -s2,   0, -s2), # left-down
-		Vec3(   0,   0,  -1), # down
-		Vec3(  s2,   0, -s2), # right-down
-
-		# YZ plane
-		# 						    # forward
-		Vec3(   0,  s2,  s2), # forward-up
-		# 						    # up
-		Vec3(   0, -s2,  s2), # back-up
-		# 						    # back
-		Vec3(   0, -s2, -s2), # back-down
-		# 						    # down
-		Vec3(   0,  s2, -s2), # forward-down
-
-		# 3D diagonals
-		Vec3(  s3,  s3,  s3), # forward-up-right
-		Vec3( -s3,  s3,  s3), # forward-up-left
-		Vec3( -s3,  s3, -s3), # forward-down-left
-		Vec3(  s3,  s3, -s3), # forward-down-right
-		Vec3(  s3, -s3,  s3), # back-up-right
-		Vec3( -s3, -s3,  s3), # back-up-left
-		Vec3( -s3, -s3, -s3), # back-down-left
-		Vec3(  s3, -s3, -s3)  # back-down-right
-	]
-
-	binaural_irs = [
-		read_audio('right.wav'),
-		read_audio('forward-right.wav'),
-		read_audio('forward.wav'),
-		read_audio('forward-left.wav'),
-		read_audio('left.wav'),
-		read_audio('back-left.wav'),
-		read_audio('back.wav'),
-		read_audio('back-right.wav'),
-		read_audio('right-up.wav'),
-		read_audio('up.wav'),
-		read_audio('left-up.wav'),
-		read_audio('left-down.wav'),
-		read_audio('down.wav'),
-		read_audio('right-down.wav'),
-		read_audio('forward-up.wav'),
-		read_audio('back-up.wav'),
-		read_audio('back-down.wav'),
-		read_audio('forward-down.wav'),
-		read_audio('forward-up-right.wav'),
-		read_audio('forward-up-left.wav'),
-		read_audio('forward-down-left.wav'),
-		read_audio('forward-down-right.wav'),
-		read_audio('back-up-right.wav'),
-		read_audio('back-up-left.wav'),
-		read_audio('back-down-left.wav'),
-		read_audio('back-down-right.wav')
-	]
+	binarual_dir_info = {
+		'back-down-left':     Vec3( -1, -1, -1).norm(),
+		'back-down':          Vec3(  0, -1, -1).norm(),
+		'back-down-right':    Vec3(  1, -1, -1).norm(),
+		'left-down':          Vec3( -1,  0, -1).norm(),
+		'down':               Vec3(  0,  0, -1).norm(),
+		'right-down':         Vec3(  1,  0, -1).norm(),
+		'forward-down-left':  Vec3( -1,  1, -1).norm(),
+		'forward-down':       Vec3(  0,  1, -1).norm(),
+		'forward-down-right': Vec3(  1,  1, -1).norm(),
+		'back-left':          Vec3( -1, -1,  0).norm(),
+		'back':               Vec3(  0, -1,  0).norm(),
+		'back-right':         Vec3(  1, -1,  0).norm(),
+		'right':              Vec3(  1,  0,  0).norm(),
+		'left':               Vec3( -1,  0,  0).norm(),
+		'forward-left':       Vec3( -1,  1,  0).norm(),
+		'forward':            Vec3(  0,  1,  0).norm(),
+		'forward-right':      Vec3(  1,  1,  0).norm(),
+		'back-up-left':       Vec3( -1, -1,  1).norm(),
+		'back-up':            Vec3(  0, -1,  1).norm(),
+		'back-up-right':      Vec3(  1, -1,  1).norm(),
+		'left-up':            Vec3( -1,  0,  1).norm(),
+		'up':                 Vec3(  0,  0,  1).norm(),
+		'right-up':           Vec3(  1,  0,  1).norm(),
+		'forward-up-left':    Vec3( -1,  1,  1).norm(),
+		'forward-up':         Vec3(  0,  1,  1).norm(),
+		'forward-up-right':   Vec3(  1,  1,  1).norm(),
+	}
+	binarual_dirs = list(binarual_dir_info.values())
+	binaural_irs = [read_audio(f'birs/{dir}.wav') for dir in binarual_dir_info]
 	max_ir_len = np.max([len(ir) for ir in binaural_irs])
 
 	def __init__(self, ray_dists):
 		self.ray_dists = ray_dists
 
-	# TODO: since this only has a single value for each ray, the convolution might be able to be optimized
 	def get_echo(self, audio):
+		# TODO: since this only has a single value for each ray, the convolution might be able to be optimized
 		max_dist = np.max(self.ray_dists)
-		impulse_response = np.zeros((int(max_dist * speed_of_sound)))
+		impulse_response = np.zeros((int(max_dist * speed_of_sound) + 1))
 		for ray_dist in self.ray_dists:
-			impulse_response[int(ray_dist * speed_of_sound)] = self.bounce_mult / ray_dist ** 2
+			ray_dist = max(ray_dist, 1)
+			delay = int(ray_dist * speed_of_sound)
+			impulse_response[delay] = 1 / ray_dist
 		return apply_impulse_response(audio, impulse_response)
 
 	def get_binaural_echo(self, audio):
 		max_dist = np.max(self.ray_dists)
-		impulse_response = np.zeros((int(max_dist * speed_of_sound) + self.max_ir_len))
+		impulse_response = np.zeros((int(max_dist * speed_of_sound) + self.max_ir_len, 2))
 		for ray_dist, ir in zip(self.ray_dists, self.binaural_irs):
+			ray_dist = max(ray_dist, 1)
 			delay = int(ray_dist * speed_of_sound)
-			impulse_response[delay:delay + len(ir)] += ir * self.bounce_mult / ray_dist ** 2
+			impulse_response[delay:delay + len(ir)] += ir / ray_dist
 		return apply_impulse_response(audio, impulse_response)
 
-	def apply_binaural_angle(self, audio, source_rel_pos):
-		source_dir = source_rel_pos.normalized()
+	def apply_binaural_angle(audio, source_rel_pos):
+		if source_rel_pos.length() == 0:
+			return audio
+		source_dir = source_rel_pos.norm()
 
 		# Find closest 3 dirs
-		dists = [(source_dir - ray_dir).length() for ray_dir in self.ray_dirs]
+		dists = [(source_dir - ray_dir).length() for ray_dir in AudioEnv.binarual_dirs]
 		# closest_dirs = [self.ray_dirs[i] for i in np.argsort(dists)[:3]]
 		closest_dirs_idxs = np.argsort(dists)[:3]
-		closest_dirs = [self.ray_dirs[i] for i in closest_dirs_idxs]
+		closest_dirs = [AudioEnv.binarual_dirs[i] for i in closest_dirs_idxs]
 
 		# Interpolate between the 3 closest rays using area percentages.
 		#   Use the area of the triangle opposite of each ray as the weight.
@@ -188,53 +180,47 @@ class AudioEnv:
 		]
 		interp_weights /= np.sum(interp_weights)    # sum(interp_weights) should now be 1
 
-		ir = np.sum([
-			self.binaural_irs[closest_dirs_idxs[i]] * interp_weights[i] for i in range(3)
-		], axis=0)
-		return apply_impulse_response(audio, ir)
+		max_ir_len = np.max([len(AudioEnv.binaural_irs[i]) for i in closest_dirs_idxs])
+		irs = []
+		for i, idx in enumerate(closest_dirs_idxs):
+			ir = AudioEnv.binaural_irs[idx]
+			irs.append(pad_audio_to_length(ir * interp_weights[i], max_ir_len))
+		return apply_impulse_response(audio, np.sum(irs, axis=0))
+
+	def apply_spatialization(audio, source_rel_pos, source_env, listener_env, has_LOS, echo_mult=0.2):
+		dist = max(source_rel_pos.length(), 1)
+		direct = AudioEnv.apply_binaural_angle(audio, source_rel_pos) / dist
+		if not has_LOS:
+			# apply lowpass filter if no line of sight (as high frequencies are more likely to be blocked by obstacles)
+			direct = pass_filter(direct, 1000, type='lowpass')
+		source_echo = echo_mult * source_env.get_echo(audio) / dist
+		incoming = combine_audio(direct, source_echo)
+
+		listener_echo = echo_mult * listener_env.get_binaural_echo(incoming)
+		audio = combine_audio(incoming, listener_echo)
+		# this delay conceptually happens before applying listener_env,
+		#   but I believe it's commutative and faster to apply it after
+		delay = int(dist / speed_of_sound * sample_rate)
+		audio = np.concatenate((np.zeros((delay, 2)), audio))
+		if np.max(np.abs(audio)) > 1:
+			audio /= np.max(np.abs(audio))
+		return audio
 
 
 
 
+print('Starting')
 
-def apply_spatialization(audio, source_rel_pos, source_env, listener_env, has_LOS):
-	echo = source_env.get_echo(audio)
-	if not has_LOS:
-		# apply lowpass filter if no LOS (as high frequencies are more likely to be blocked by obstacles)
-		audio = pass_filter(audio, 1000, type='lowpass')
-	dist = source_rel_pos.length()
-	audio = (audio + echo) / dist ** 2
-	audio = listener_env.get_binaural_echo(audio, source_rel_pos)
-	# this delay conceptually happens before applying listener_env,
-	#   but I believe it's commutative and faster to apply it after
-	delay = int(dist * speed_of_sound)
-	audio = np.concatenate((np.zeros(delay), audio))
+audio = read_audio('elderberries.wav')
+room_env = AudioEnv([np.random.rand() * 2 + 1 for _ in range(26)])
+write_audio('eld_room.wav',       AudioEnv.apply_spatialization(audio, Vec3(0, 1, 0), room_env, room_env, True))
+write_audio('eld_room_nolos.wav', AudioEnv.apply_spatialization(audio, Vec3(0, 1, 0), room_env, room_env, False))
 
+cath_env = AudioEnv([np.random.rand() * 20 + 10 for _ in range(26)])
+write_audio('eld_cath.wav', AudioEnv.apply_spatialization(audio, Vec3(0, 4, 0), cath_env, cath_env, True))
+write_audio('eld_cath_right.wav', AudioEnv.apply_spatialization(audio, Vec3(4, 1, 0.4), cath_env, cath_env, True))
 
-
-
-
-# ir = read_audio('room_ir.wav')
-ir = read_audio('left binaural impulse.wav')
-input = read_audio('my_voice.wav')
-output = apply_impulse_response(input, ir)
-play_audio(output)
-write_audio('output.wav', output)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+print('Done')
 
 
 
@@ -243,14 +229,21 @@ write_audio('output.wav', output)
 
 
 
-def mix_audio(audio1, audio2, ratio):
-	return audio1 * ratio + audio2 * (1 - ratio)
 
-def pass_filter(audio, cutoff, order=4, type='highpass'):
-	sos = iirfilter(order, cutoff, btype=type, fs=sample_rate, output='sos')
-	if len(audio.shape) == 2:
-		return np.array([sosfilt(sos, audio[:, i]) for i in range(2)]).T
-	return sosfilt(sos, audio)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
